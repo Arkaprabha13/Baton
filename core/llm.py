@@ -7,7 +7,7 @@ rate limits.
 
 import time
 from typing import Literal
-
+from psycopg.types.json import Jsonb
 from openai import AsyncOpenAI
 from groq import AsyncGroq
 from google import genai
@@ -31,19 +31,20 @@ def _get_provider_config(model: ModelProvider) -> dict:
     configs = {
         "nemotron": {
             "base_url": "https://integrate.api.nvidia.com/v1",
-            "model_id": "nvidia/nemotron-3-super-120b-a12b",
+            "model_id": "nvidia/nemotron-3-ultra-550b-a55b",
             "rpm": settings.nvidia_rpm,
             "api_key": settings.nvidia_api_key,
         },
         "groq": {
             "base_url": None,
-            "model_id": "llama-3.3-70b-versatile",
+            # "model_id": "openai/gpt-oss-120b",
+            "model_id": "qwen/qwen3.8-27b",
             "rpm": settings.groq_rpm,
             "api_key": settings.groq_api_key,
         },
         "gemini": {
             "base_url": None,
-            "model_id": "gemini-2.0-flash",
+            "model_id": "gemini-3.8-flash",
             "rpm": settings.gemini_rpm,
             "api_key": settings.gemini_api_key,
         },
@@ -79,10 +80,10 @@ async def _log_usage(
     async with get_conn() as conn:
         await conn.execute(
             """
-            INSERT INTO rate_limit_log (service, endpoint, tokens_in, tokens_out, created_at)
-            VALUES (%s, %s, %s, %s, NOW())
+            INSERT INTO rate_limit_log (service, endpoint, tokens_used, requests_used, window_start, metadata)
+            VALUES (%s, %s, %s, 1, date_trunc('minute', NOW()), '{}')
             """,
-            (service, endpoint, tokens_in, tokens_out),
+            (service, endpoint, tokens_in + tokens_out),
         )
 
 
@@ -156,7 +157,10 @@ async def _chat_nemotron(
     tokens_in = response.usage.prompt_tokens if response.usage else 0
     tokens_out = response.usage.completion_tokens if response.usage else 0
 
-    await _log_usage("nemotron", "chat", tokens_in, tokens_out)
+    try:
+        await _log_usage("nemotron", "chat", tokens_in, tokens_out)
+    except Exception as e:
+        print(f"   ⚠️ [DB Log] Failed to log usage: {e}")
     return content
 
 
@@ -174,13 +178,17 @@ async def _chat_groq(
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
+        extra_body={"reasoning_effort": "none"}
     )
 
     content = response.choices[0].message.content or ""
     tokens_in = response.usage.prompt_tokens if response.usage else 0
     tokens_out = response.usage.completion_tokens if response.usage else 0
 
-    await _log_usage("groq", "chat", tokens_in, tokens_out)
+    try:
+        await _log_usage("groq", "chat", tokens_in, tokens_out)
+    except Exception as e:
+        print(f"   ⚠️ [DB Log] Failed to log usage: {e}")
     return content
 
 

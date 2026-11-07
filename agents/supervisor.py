@@ -26,20 +26,22 @@ def route(state: BatonState) -> Literal["cleaner", "enricher", "qualifier", "neg
     Returns:
         Next node name or END.
     """
-    stage = state.get("stage", "raw")
+    stage = state.get("stage", "")
 
-    # Stage to next node mapping
-    stage_to_node = {
-        "raw": CLEANER,
-        "cleaned": ENRICHER,
-        "enriched": QUALIFIER,
-        "qualified": NEGOTIATOR,
-        "negotiating": NEGOTIATOR,  # Stay in negotiation until converted/lost
-        "lost": "__end__",
-        "converted": REPORTER,
-    }
+    if stage == "raw":
+        return "cleaner"
+    elif stage == "cleaned":
+        return "enricher"
+    elif stage == "enriched":
+        return "qualifier"
+    elif stage == "qualified":
+        return "negotiator"
+    elif stage in ["quoted", "converted"]:
+        return "reporter"
+    elif stage == "lost":
+        return "__end__"
 
-    return stage_to_node.get(stage, "__end__")
+    return "__end__"
 
 
 async def supervisor_node(state: BatonState) -> BatonState:

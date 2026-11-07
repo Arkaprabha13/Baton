@@ -14,6 +14,10 @@ from core.db import close_pool, init_pool
 from tools.hitl_dashboard import app
 from tools.scheduler import start_scheduler, stop_scheduler
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 
 async def startup() -> None:
     """Application startup: initialize DB pool and start scheduler."""

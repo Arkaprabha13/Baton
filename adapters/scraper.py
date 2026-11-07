@@ -5,6 +5,7 @@ polls until complete, downloads and parses the result CSV into
 a list of raw lead dicts.
 """
 
+import asyncio
 import csv
 import io
 from typing import Any
@@ -16,33 +17,51 @@ from core.config import settings
 
 async def submit_job(query: str, location: str, max_results: int = 100) -> str:
     """POST /api/v1/jobs; return job_id.
-
+    
     Args:
         query: Search query (e.g., "coffee shops").
         location: Location to search in (e.g., "NYC").
         max_results: Maximum number of results to return.
-
+        
     Returns:
         The job_id string from the API response.
     """
     url = f"{settings.maps_scraper_url}/api/v1/jobs"
+    
+    combined_keyword = f"{query} in {location}"
+    
+    # Hardcoded coordinates for Austin, TX for testing
     payload = {
-        "query": query,
-        "location": location,
-        "max_results": max_results,
+        "name": "baton_job",
+        "keywords": [combined_keyword],
+        "lat": "30.2672",
+        "lon": "-97.7431",
+        "max_time": 300,
+        "depth": 10,
+        "email": True,
+        "lang": "en",
+        "zoom": 15
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url, json=payload)
+        
+        # We expect a 201 Created status code, which raise_for_status allows.
         response.raise_for_status()
         data = response.json()
-        return data["job_id"]
+        
+        # The API actually returns {"id": "..."} on success
+        job_id = data.get("id") or data.get("job_id")
+        if not job_id:
+            raise RuntimeError(f"API did not return a job ID. Response: {data}")
+            
+        return job_id
 
 
 async def poll_job(
     job_id: str, timeout_s: float = 300.0, interval_s: float = 5.0
 ) -> str:
-    """Poll GET /api/v1/jobs/{job_id} until status == 'done'; return download URL.
+    """Poll GET /api/v1/jobs/{job_id} until the job is done; return download URL.
 
     Args:
         job_id: The job ID returned by submit_job.
@@ -50,11 +69,7 @@ async def poll_job(
         interval_s: Polling interval in seconds.
 
     Returns:
-        The download URL from the completed job.
-
-    Raises:
-        TimeoutError: If the job doesn't complete within timeout_s.
-        RuntimeError: If the job fails or returns an error status.
+        The constructed download URL for the completed job.
     """
     url = f"{settings.maps_scraper_url}/api/v1/jobs/{job_id}"
     elapsed = 0.0
@@ -65,21 +80,22 @@ async def poll_job(
             response.raise_for_status()
             data = response.json()
 
-            status = data.get("status")
-            if status == "done":
-                download_url = data.get("download_url")
-                if not download_url:
-                    raise RuntimeError("Job completed but no download_url provided")
-                # Handle relative URLs
-                if download_url.startswith("/"):
-                    return f"{settings.maps_scraper_url}{download_url}"
-                return download_url
-            elif status == "failed":
-                error = data.get("error", "Unknown error")
+            # FIX 1 & 2: Parse the exact API schema
+            status = data.get("Status")
+            progress = data.get("Progress", {})
+            stage = progress.get("stage")
+            
+            # If Status is "ok" and stage is "done" (or 100% complete)
+            if status == "ok" and (stage == "done" or progress.get("percent") == 100):
+                # FIX 3: Construct the download URL manually
+                return f"{settings.maps_scraper_url}/api/v1/jobs/{job_id}/download"
+                
+            # Check for errors
+            elif status == "failed" or data.get("Error"):
+                error = data.get("Error", "Unknown error")
                 raise RuntimeError(f"Scrape job failed: {error}")
-            elif status in ("pending", "running"):
-                pass  # Continue polling
 
+            # Keep waiting
             await asyncio.sleep(interval_s)
             elapsed += interval_s
 
@@ -95,7 +111,8 @@ async def download_results(download_url: str) -> list[dict[str, Any]]:
     Returns:
         List of dictionaries representing CSV rows.
     """
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # Added follow_redirects=True in case the Docker container redirects to an S3 bucket
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
         response = await client.get(download_url)
         response.raise_for_status()
         csv_text = response.text
@@ -116,11 +133,14 @@ async def scrape(query: str, location: str, max_results: int = 100) -> list[dict
     Returns:
         List of lead dictionaries from the scraped results.
     """
+    print(f"🚀 Submitting job for: {query} in {location}...")
     job_id = await submit_job(query, location, max_results)
+    
+    print(f"⏳ Job {job_id} submitted. Polling for completion...")
     download_url = await poll_job(job_id)
+    
+    print(f"📥 Job done! Downloading results from {download_url}...")
     results = await download_results(download_url)
+    
+    print(f"✅ Successfully scraped {len(results)} leads!")
     return results
-
-
-# Import asyncio at the end to avoid circular imports
-import asyncio

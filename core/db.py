@@ -25,6 +25,7 @@ async def init_pool() -> None:
         min_size=1,
         max_size=10,
         open=False,
+        kwargs={"prepare_threshold": None},
     )
     await _pool.open()
 

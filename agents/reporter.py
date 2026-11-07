@@ -52,11 +52,11 @@ async def generate_summary(state: BatonState) -> str:
     if quotation_id:
         async with get_conn() as conn:
             row = await conn.execute(
-                "SELECT line_items, total_value FROM quotations WHERE id = %s", (quotation_id,)
+                "SELECT line_items, total_amount FROM quotations WHERE id = %s", (quotation_id,)
             )
             q = await row.fetchone()
             if q:
-                quotation_details = f"Line Items: {q[0]}\nTotal Value: ${q[1]}"
+                quotation_details = f"Line Items: {q[0]}\nTotal Amount: ${q[1]}"
 
     conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
 
@@ -71,8 +71,7 @@ async def generate_summary(state: BatonState) -> str:
 
     messages_for_llm = [{"role": "user", "content": prompt}]
 
-    summary = await chat(messages=messages_for_llm, model="gemini", temperature=0.3, max_tokens=2048)
-
+    summary = await chat(messages=messages_for_llm, model="nemotron", temperature=0.3, max_tokens=4096, enable_thinking=True)
     return summary
 
 
@@ -87,7 +86,7 @@ async def persist_conversion(lead_id: str, quotation_id: str, value: float) -> N
     async with get_conn() as conn:
         await conn.execute(
             """
-            INSERT INTO conversion_events (lead_id, quotation_id, value, created_at)
+            INSERT INTO conversion_events (lead_id, quotation_id, value, converted_at)
             VALUES (%s, %s, %s, NOW())
             """,
             (lead_id, quotation_id, value),
@@ -111,7 +110,7 @@ async def reporter_node(state: BatonState) -> BatonState:
     if quotation_id:
         async with get_conn() as conn:
             row = await conn.execute(
-                "SELECT total_value FROM quotations WHERE id = %s", (quotation_id,)
+                "SELECT total_amount FROM quotations WHERE id = %s", (quotation_id,)
             )
             q = await row.fetchone()
             if q:
@@ -127,8 +126,6 @@ async def reporter_node(state: BatonState) -> BatonState:
     messages = state.get("messages", [])
     messages.append({"role": "system", "content": f"Deal Summary:\n{summary}"})
 
-    return {
-        **state,
-        "stage": "converted",
-        "messages": messages,
-    }
+    state["stage"] = "done"
+    state["messages"] = messages
+    return state
